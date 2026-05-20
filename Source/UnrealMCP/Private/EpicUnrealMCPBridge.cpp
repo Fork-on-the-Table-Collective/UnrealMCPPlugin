@@ -68,6 +68,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     BlueprintCommands = MakeShared<FEpicUnrealMCPBlueprintCommands>();
     BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
     WidgetCommands = MakeShared<FEpicUnrealMCPWidgetCommands>();
+    TestCommands = MakeShared<FEpicUnrealMCPTestCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -76,6 +77,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     BlueprintCommands.Reset();
     BlueprintGraphCommands.Reset();
     WidgetCommands.Reset();
+    TestCommands.Reset();
 }
 
 // Initialize subsystem
@@ -341,6 +343,18 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_slot_property"))
             {
                 ResultJson = WidgetCommands->HandleCommand(CommandType, Params);
+            }
+            // Test Commands
+            else if (CommandType == TEXT("create_functional_test") ||
+                     CommandType == TEXT("list_all_tests") ||
+                     CommandType == TEXT("get_test_info") ||
+                     CommandType == TEXT("set_test_timeout") ||
+                     CommandType == TEXT("set_test_description") ||
+                     CommandType == TEXT("delete_test") ||
+                     CommandType == TEXT("create_test_map") ||
+                     CommandType == TEXT("add_actor_to_test_map"))
+            {
+                ResultJson = TestCommands->HandleCommand(CommandType, Params);
             }
             else
             {
