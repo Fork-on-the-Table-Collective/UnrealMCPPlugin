@@ -1,0 +1,64 @@
+# Unreal Engine Plugin .gitignore
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.ipa
+
+# Unreal Engine specific
+Binaries/
+Intermediate/
+DerivedDataCache/
+Build/
+Saved/
+
+# Visual Studio files
+.vs/
+*.opensdf
+*.sdf
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+
+# Rider
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Plugin packaging
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
