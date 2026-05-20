@@ -55,6 +55,7 @@
 #include "Commands/EpicUnrealMCPEditorCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
+#include "Commands/EpicUnrealMCPWidgetCommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 
 // Default settings
@@ -66,6 +67,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     EditorCommands = MakeShared<FEpicUnrealMCPEditorCommands>();
     BlueprintCommands = MakeShared<FEpicUnrealMCPBlueprintCommands>();
     BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
+    WidgetCommands = MakeShared<FEpicUnrealMCPWidgetCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -73,6 +75,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     EditorCommands.Reset();
     BlueprintCommands.Reset();
     BlueprintGraphCommands.Reset();
+    WidgetCommands.Reset();
 }
 
 // Initialize subsystem
@@ -320,6 +323,24 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("rename_function"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
+            }
+            // Widget Commands
+            else if (CommandType == TEXT("create_widget_blueprint") ||
+                     CommandType == TEXT("delete_widget_blueprint") ||
+                     CommandType == TEXT("get_widget_blueprint_info") ||
+                     CommandType == TEXT("list_all_widgets") ||
+                     CommandType == TEXT("get_widget_tree") ||
+                     CommandType == TEXT("add_widget_to_tree") ||
+                     CommandType == TEXT("remove_widget_from_tree") ||
+                     CommandType == TEXT("reparent_widget") ||
+                     CommandType == TEXT("get_widget_properties") ||
+                     CommandType == TEXT("set_widget_property") ||
+                     CommandType == TEXT("set_widget_transform") ||
+                     CommandType == TEXT("set_widget_anchors") ||
+                     CommandType == TEXT("get_slot_properties") ||
+                     CommandType == TEXT("set_slot_property"))
+            {
+                ResultJson = WidgetCommands->HandleCommand(CommandType, Params);
             }
             else
             {
