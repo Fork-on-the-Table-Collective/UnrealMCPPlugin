@@ -308,35 +308,9 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPTestCommands::HandleCreateTestMap(const TS
 		return CreateErrorResponse(TEXT("Map already exists"));
 	}
 
-	// Create a new blank world
-	UWorld* NewWorld = UWorld::CreateWorld(EWorldType::Editor, false);
-	if (!NewWorld)
-	{
-		return CreateErrorResponse(TEXT("Failed to create world"));
-	}
-
-	// Save the world as a map
-	FString PackageName = MapName;
-	UPackage* Package = CreatePackage(*PackageName);
-	NewWorld->Rename(*FPaths::GetBaseFilename(PackageName), Package);
-
-	// Save package
-	FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetMapPackageExtension());
-	
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	SaveArgs.SaveFlags = SAVE_None;
-	bool bSaved = UPackage::SavePackage(Package, NewWorld, *PackageFileName, SaveArgs);
-
-	if (bSaved)
-	{
-		FAssetRegistryModule::AssetCreated(NewWorld);
-		return CreateSuccessResponse(FString::Printf(TEXT("Created test map: %s"), *MapName));
-	}
-	else
-	{
-		return CreateErrorResponse(TEXT("Failed to save test map"));
-	}
+	// Map creation is complex and safer to do in the editor
+	// For now, return a helpful message directing users to create maps manually
+	return CreateErrorResponse(TEXT("Map creation via MCP not yet implemented. Please create test maps manually in the Unreal Editor (File > New Level), then use MCP to create and configure FunctionalTest Blueprints."));
 }
 
 // Add actor to test map
