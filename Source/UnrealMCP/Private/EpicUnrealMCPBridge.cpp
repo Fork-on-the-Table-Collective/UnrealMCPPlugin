@@ -254,6 +254,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("fix_duplicate_anim_slots") ||
                      CommandType == TEXT("list_blueprint_graphs") ||
                      CommandType == TEXT("set_animation_blueprint_skeleton") ||
+                     CommandType == TEXT("retarget_animation_blueprint") ||
+                     CommandType == TEXT("get_skeleton_bones") ||
+                     CommandType == TEXT("compare_skeleton_bones") ||
                      // DataTable operations
                      CommandType == TEXT("get_datatable") ||
                      CommandType == TEXT("update_datatable_row") ||

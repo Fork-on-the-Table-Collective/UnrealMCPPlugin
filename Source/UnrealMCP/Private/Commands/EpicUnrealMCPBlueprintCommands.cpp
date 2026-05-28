@@ -47,10 +47,70 @@
 #include "Animation/Skeleton.h"
 #include "AnimGraphNode_Slot.h"
 #include "Engine/DataTable.h"
+#include "Engine/SkeletalMesh.h"
 #include "EngineUtils.h"
 #include "JsonObjectConverter.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "Editor.h"
+
+namespace
+{
+TArray<TSharedPtr<FJsonValue>> BuildBoneArray(const FReferenceSkeleton& ReferenceSkeleton)
+{
+    TArray<FString> BoneNames;
+    BoneNames.Reserve(ReferenceSkeleton.GetNum());
+
+    for (int32 BoneIndex = 0; BoneIndex < ReferenceSkeleton.GetNum(); ++BoneIndex)
+    {
+        BoneNames.Add(ReferenceSkeleton.GetBoneName(BoneIndex).ToString());
+    }
+
+    BoneNames.Sort();
+
+    TArray<TSharedPtr<FJsonValue>> BoneArray;
+    BoneArray.Reserve(BoneNames.Num());
+    for (const FString& BoneName : BoneNames)
+    {
+        BoneArray.Add(MakeShared<FJsonValueString>(BoneName));
+    }
+
+    return BoneArray;
+}
+
+TSet<FName> BuildBoneSet(const FReferenceSkeleton& ReferenceSkeleton)
+{
+    TSet<FName> BoneSet;
+    for (int32 BoneIndex = 0; BoneIndex < ReferenceSkeleton.GetNum(); ++BoneIndex)
+    {
+        BoneSet.Add(ReferenceSkeleton.GetBoneName(BoneIndex));
+    }
+    return BoneSet;
+}
+
+TArray<TSharedPtr<FJsonValue>> BuildMissingBoneArray(const FReferenceSkeleton& SourceSkeleton, const TSet<FName>& TargetBones)
+{
+    TArray<FString> MissingBoneNames;
+    for (int32 BoneIndex = 0; BoneIndex < SourceSkeleton.GetNum(); ++BoneIndex)
+    {
+        const FName BoneName = SourceSkeleton.GetBoneName(BoneIndex);
+        if (!TargetBones.Contains(BoneName))
+        {
+            MissingBoneNames.Add(BoneName.ToString());
+        }
+    }
+
+    MissingBoneNames.Sort();
+
+    TArray<TSharedPtr<FJsonValue>> MissingBones;
+    MissingBones.Reserve(MissingBoneNames.Num());
+    for (const FString& BoneName : MissingBoneNames)
+    {
+        MissingBones.Add(MakeShared<FJsonValueString>(BoneName));
+    }
+
+    return MissingBones;
+}
+}
 
 FEpicUnrealMCPBlueprintCommands::FEpicUnrealMCPBlueprintCommands()
 {
@@ -135,6 +195,18 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     else if (CommandType == TEXT("set_animation_blueprint_skeleton"))
     {
         return HandleSetAnimationBlueprintSkeleton(Params);
+    }
+    else if (CommandType == TEXT("retarget_animation_blueprint"))
+    {
+        return HandleRetargetAnimationBlueprint(Params);
+    }
+    else if (CommandType == TEXT("get_skeleton_bones"))
+    {
+        return HandleGetSkeletonBones(Params);
+    }
+    else if (CommandType == TEXT("compare_skeleton_bones"))
+    {
+        return HandleCompareSkeletonBones(Params);
     }
     else if (CommandType == TEXT("get_datatable"))
     {
@@ -2077,6 +2149,131 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetAnimationBluep
     Response->SetStringField(TEXT("old_skeleton"), OldSkeletonPath);
     Response->SetStringField(TEXT("new_skeleton"), SkeletonPath);
     Response->SetStringField(TEXT("message"), FString::Printf(TEXT("Animation blueprint retargeted from %s to %s"), *OldSkeletonPath, *SkeletonPath));
+
+    if (OldSkeleton)
+    {
+        const TSet<FName> NewSkeletonBones = BuildBoneSet(NewSkeleton->GetReferenceSkeleton());
+        TArray<TSharedPtr<FJsonValue>> MissingBones = BuildMissingBoneArray(OldSkeleton->GetReferenceSkeleton(), NewSkeletonBones);
+        Response->SetArrayField(TEXT("missing_old_bones_in_new"), MissingBones);
+        Response->SetNumberField(TEXT("missing_old_bones_in_new_count"), MissingBones.Num());
+    }
+
+    return Response;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRetargetAnimationBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AnimationBlueprintPath;
+    if (!Params->TryGetStringField(TEXT("animation_blueprint_path"), AnimationBlueprintPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'animation_blueprint_path' parameter"));
+    }
+
+    FString NewSkeletonPath;
+    if (!Params->TryGetStringField(TEXT("new_skeleton"), NewSkeletonPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_skeleton' parameter"));
+    }
+
+    FString ExpectedOldSkeletonPath;
+    Params->TryGetStringField(TEXT("old_skeleton"), ExpectedOldSkeletonPath);
+
+    if (!ExpectedOldSkeletonPath.IsEmpty())
+    {
+        UBlueprint* BP = FEpicUnrealMCPCommonUtils::FindBlueprint(AnimationBlueprintPath);
+        UAnimBlueprint* AnimBP = Cast<UAnimBlueprint>(BP);
+        if (!AnimBP)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Asset '%s' is not an Animation Blueprint or could not be loaded"), *AnimationBlueprintPath));
+        }
+
+        const FString CurrentOldSkeleton = AnimBP->TargetSkeleton ? AnimBP->TargetSkeleton->GetPathName() : TEXT("None");
+        if (!CurrentOldSkeleton.Equals(ExpectedOldSkeletonPath, ESearchCase::IgnoreCase))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Old skeleton mismatch. Expected '%s' but animation blueprint currently uses '%s'"),
+                    *ExpectedOldSkeletonPath,
+                    *CurrentOldSkeleton));
+        }
+    }
+
+    TSharedPtr<FJsonObject> ForwardParams = MakeShared<FJsonObject>();
+    ForwardParams->SetStringField(TEXT("blueprint_path"), AnimationBlueprintPath);
+    ForwardParams->SetStringField(TEXT("skeleton_path"), NewSkeletonPath);
+    return HandleSetAnimationBlueprintSkeleton(ForwardParams);
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetSkeletonBones(const TSharedPtr<FJsonObject>& Params)
+{
+    FString SkeletonPath;
+    if (!Params->TryGetStringField(TEXT("skeleton_path"), SkeletonPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'skeleton_path' parameter"));
+    }
+
+    USkeleton* Skeleton = Cast<USkeleton>(StaticLoadObject(USkeleton::StaticClass(), nullptr, *SkeletonPath));
+    if (!Skeleton)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Skeleton not found: %s"), *SkeletonPath));
+    }
+
+    const FReferenceSkeleton& ReferenceSkeleton = Skeleton->GetReferenceSkeleton();
+    TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+    Response->SetStringField(TEXT("status"), TEXT("success"));
+    Response->SetStringField(TEXT("skeleton_path"), SkeletonPath);
+    Response->SetNumberField(TEXT("bone_count"), ReferenceSkeleton.GetNum());
+    Response->SetArrayField(TEXT("bones"), BuildBoneArray(ReferenceSkeleton));
+    return Response;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCompareSkeletonBones(const TSharedPtr<FJsonObject>& Params)
+{
+    FString SourceSkeletonPath;
+    if (!Params->TryGetStringField(TEXT("source_skeleton_path"), SourceSkeletonPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'source_skeleton_path' parameter"));
+    }
+
+    FString TargetSkeletonPath;
+    if (!Params->TryGetStringField(TEXT("target_skeleton_path"), TargetSkeletonPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'target_skeleton_path' parameter"));
+    }
+
+    USkeleton* SourceSkeleton = Cast<USkeleton>(StaticLoadObject(USkeleton::StaticClass(), nullptr, *SourceSkeletonPath));
+    if (!SourceSkeleton)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Source skeleton not found: %s"), *SourceSkeletonPath));
+    }
+
+    USkeleton* TargetSkeleton = Cast<USkeleton>(StaticLoadObject(USkeleton::StaticClass(), nullptr, *TargetSkeletonPath));
+    if (!TargetSkeleton)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Target skeleton not found: %s"), *TargetSkeletonPath));
+    }
+
+    const FReferenceSkeleton& SourceRefSkeleton = SourceSkeleton->GetReferenceSkeleton();
+    const FReferenceSkeleton& TargetRefSkeleton = TargetSkeleton->GetReferenceSkeleton();
+    const TSet<FName> SourceBones = BuildBoneSet(SourceRefSkeleton);
+    const TSet<FName> TargetBones = BuildBoneSet(TargetRefSkeleton);
+
+    TArray<TSharedPtr<FJsonValue>> MissingInTarget = BuildMissingBoneArray(SourceRefSkeleton, TargetBones);
+    TArray<TSharedPtr<FJsonValue>> MissingInSource = BuildMissingBoneArray(TargetRefSkeleton, SourceBones);
+
+    TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+    Response->SetStringField(TEXT("status"), TEXT("success"));
+    Response->SetStringField(TEXT("source_skeleton_path"), SourceSkeletonPath);
+    Response->SetStringField(TEXT("target_skeleton_path"), TargetSkeletonPath);
+    Response->SetNumberField(TEXT("source_bone_count"), SourceRefSkeleton.GetNum());
+    Response->SetNumberField(TEXT("target_bone_count"), TargetRefSkeleton.GetNum());
+    Response->SetArrayField(TEXT("missing_in_target"), MissingInTarget);
+    Response->SetArrayField(TEXT("missing_in_source"), MissingInSource);
+    Response->SetNumberField(TEXT("missing_in_target_count"), MissingInTarget.Num());
+    Response->SetNumberField(TEXT("missing_in_source_count"), MissingInSource.Num());
     return Response;
 }
 

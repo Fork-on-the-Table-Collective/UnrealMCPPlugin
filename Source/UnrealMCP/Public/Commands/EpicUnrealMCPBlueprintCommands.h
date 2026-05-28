@@ -45,6 +45,9 @@ private:
 
     // Animation blueprint skeleton management
     TSharedPtr<FJsonObject> HandleSetAnimationBlueprintSkeleton(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleRetargetAnimationBlueprint(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetSkeletonBones(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleCompareSkeletonBones(const TSharedPtr<FJsonObject>& Params);
 
     // Generic DataTable operations
     TSharedPtr<FJsonObject> HandleGetDataTable(const TSharedPtr<FJsonObject>& Params);
