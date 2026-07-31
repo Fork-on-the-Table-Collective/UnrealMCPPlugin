@@ -74,20 +74,37 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 		return nullptr;
 	}
 
-	// Find the function to call
+	// Find the function to call.
+	// Accept both "target_class" and "target_blueprint": the Python bridge sends the latter, so
+	// reading only the former silently fell through to the UKismetSystemLibrary fallback and made
+	// every project-class function fail with "Failed to create CallFunction node".
 	UFunction* TargetFunc = nullptr;
 	FString ClassName;
-	if (Params->TryGetStringField(TEXT("target_class"), ClassName))
+	if (!Params->TryGetStringField(TEXT("target_class"), ClassName))
 	{
-		UClass* TargetClass = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *ClassName));
-		if (TargetClass)
+		Params->TryGetStringField(TEXT("target_blueprint"), ClassName);
+	}
+
+	if (!ClassName.IsEmpty())
+	{
+		UClass* TargetClass = FNodeCreatorUtils::ResolveClassByName(ClassName);
+		if (!TargetClass)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("UnrealMCP: could not resolve class '%s' for function '%s'"), *ClassName, *TargetFunction);
+		}
+		else
 		{
 			TargetFunc = TargetClass->FindFunctionByName(FName(*TargetFunction));
+			if (!TargetFunc)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("UnrealMCP: class '%s' has no function '%s'"), *TargetClass->GetPathName(), *TargetFunction);
+			}
 		}
 	}
-	else
+
+	if (!TargetFunc)
 	{
-		// Try common Unreal classes
+		// Fall back to the common Unreal library so bare engine function names keep working.
 		TargetFunc = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*TargetFunction));
 	}
 

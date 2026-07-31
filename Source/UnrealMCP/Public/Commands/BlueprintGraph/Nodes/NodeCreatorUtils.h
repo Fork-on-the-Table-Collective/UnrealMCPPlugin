@@ -52,4 +52,17 @@ public:
 	 * @note Validates field existence before attempting to read them
 	 */
 	static void ExtractNodePosition(const TSharedPtr<class FJsonObject>& Params, double& OutX, double& OutY);
+
+	/**
+	 * Resolves a UClass from a loosely-specified name.
+	 *
+	 * Accepts, in order of preference:
+	 *   - a full object path      ("/Script/ViridianCo.V_InteractionComponent")
+	 *   - a Blueprint asset path  ("/Game/Blueprints/BP_Foo" -> resolves the generated "BP_Foo_C")
+	 *   - a bare class name       ("V_InteractionComponent", "AActor")
+	 *
+	 * @param ClassName - The name or path to resolve
+	 * @return The resolved UClass, or nullptr when nothing matches
+	 */
+	static UClass* ResolveClassByName(const FString& ClassName);
 };

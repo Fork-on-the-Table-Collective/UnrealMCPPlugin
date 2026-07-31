@@ -47,3 +47,39 @@ void FNodeCreatorUtils::ExtractNodePosition(const TSharedPtr<FJsonObject>& Param
 		OutY = 0.0;
 	}
 }
+
+UClass* FNodeCreatorUtils::ResolveClassByName(const FString& ClassName)
+{
+	if (ClassName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// 1. Exact object path, e.g. "/Script/ViridianCo.V_InteractionComponent".
+	if (UClass* Found = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *ClassName)))
+	{
+		return Found;
+	}
+
+	// 2. Blueprint asset path: the generated class carries a "_C" suffix.
+	if (ClassName.StartsWith(TEXT("/")) && !ClassName.EndsWith(TEXT("_C")))
+	{
+		FString GeneratedPath = ClassName;
+		if (!GeneratedPath.Contains(TEXT(".")))
+		{
+			// "/Game/Path/BP_Foo" -> "/Game/Path/BP_Foo.BP_Foo"
+			FString AssetName;
+			GeneratedPath.Split(TEXT("/"), nullptr, &AssetName, ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+			GeneratedPath = FString::Printf(TEXT("%s.%s"), *ClassName, *AssetName);
+		}
+
+		GeneratedPath.Append(TEXT("_C"));
+		if (UClass* Found = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *GeneratedPath)))
+		{
+			return Found;
+		}
+	}
+
+	// 3. Bare class name, e.g. "V_InteractionComponent" or "AActor".
+	return UClass::TryFindTypeSlow<UClass>(ClassName);
+}
