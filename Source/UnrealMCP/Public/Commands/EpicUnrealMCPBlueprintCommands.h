@@ -71,6 +71,7 @@ private:
     TSharedPtr<FJsonObject> HandleGetObjectProperty(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetObjectProperty(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetObjectProperties(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleAutoAlignIKRetargeter(const TSharedPtr<FJsonObject>& Params);
 
     // Blueprint Component Management
     TSharedPtr<FJsonObject> HandleGetBlueprintComponents(const TSharedPtr<FJsonObject>& Params);

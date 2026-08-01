@@ -73,7 +73,9 @@ public class UnrealMCP : ModuleRules
 					"PropertyEditor",      // For property editing
 					"ToolMenus",           // For editor UI
 					"BlueprintEditorLibrary", // For Blueprint utilities
-					"AnimGraph"            // For UAnimGraphNode_Slot (animation graph node types)
+					"AnimGraph",           // For UAnimGraphNode_Slot (animation graph node types)
+					"IKRig",               // IK Rig and IK Retargeter runtime types
+					"IKRigEditor"          // Supported IK Rig/Retargeter editor controllers
 				}
 			);
 		}
