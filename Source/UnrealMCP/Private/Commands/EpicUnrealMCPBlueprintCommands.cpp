@@ -52,6 +52,10 @@
 #include "JsonObjectConverter.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "Editor.h"
+#include "Rig/IKRigDefinition.h"
+#include "RigEditor/IKRigController.h"
+#include "Retargeter/IKRetargeter.h"
+#include "RetargetEditor/IKRetargeterController.h"
 
 namespace
 {
@@ -278,6 +282,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     else if (CommandType == TEXT("get_object_properties"))
     {
         return HandleGetObjectProperties(Params);
+    }
+    else if (CommandType == TEXT("fix_retarget_root_motion"))
+    {
+        return HandleFixRetargetRootMotion(Params);
     }
     // Blueprint Component Management
     else if (CommandType == TEXT("get_blueprint_components"))
@@ -3174,6 +3182,89 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetObjectProperti
     TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
     Response->SetStringField(TEXT("status"), TEXT("success"));
     Response->SetObjectField(TEXT("properties"), PropertiesObj);
+    return Response;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleFixRetargetRootMotion(const TSharedPtr<FJsonObject>& Params)
+{
+    FString SourceRigPath;
+    FString TargetRigPath;
+    FString RetargeterPath;
+    if (!Params->TryGetStringField(TEXT("source_ik_rig"), SourceRigPath) ||
+        !Params->TryGetStringField(TEXT("target_ik_rig"), TargetRigPath) ||
+        !Params->TryGetStringField(TEXT("retargeter"), RetargeterPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Required parameters: source_ik_rig, target_ik_rig, retargeter"));
+    }
+
+    UIKRigDefinition* SourceRig = LoadObject<UIKRigDefinition>(nullptr, *SourceRigPath);
+    UIKRigDefinition* TargetRig = LoadObject<UIKRigDefinition>(nullptr, *TargetRigPath);
+    UIKRetargeter* Retargeter = LoadObject<UIKRetargeter>(nullptr, *RetargeterPath);
+    if (!SourceRig || !TargetRig || !Retargeter)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to load retarget assets"));
+    }
+
+    UIKRigController* SourceController = UIKRigController::GetController(SourceRig);
+    UIKRigController* TargetController = UIKRigController::GetController(TargetRig);
+    UIKRetargeterController* RetargetController = UIKRetargeterController::GetController(Retargeter);
+    if (!SourceController || !TargetController || !RetargetController)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to acquire retarget controllers"));
+    }
+
+    SourceRig->Modify();
+    TargetRig->Modify();
+    Retargeter->Modify();
+
+    // Pelvis Motion owns Hips -> Pelvis. Mapping the same bones as an FK chain applies
+    // their rotation twice, which twists the torso and prevents clean root propagation.
+    SourceController->RemoveRetargetChain(TEXT("Root"));
+    TargetController->RemoveRetargetChain(TEXT("Root"));
+
+    RetargetController->SetIKRig(ERetargetSourceOrTarget::Source, SourceRig);
+    RetargetController->SetIKRig(ERetargetSourceOrTarget::Target, TargetRig);
+    RetargetController->RemoveAllOps();
+    RetargetController->AddDefaultOps();
+    RetargetController->AssignIKRigToAllOps(ERetargetSourceOrTarget::Source, SourceRig);
+    RetargetController->AssignIKRigToAllOps(ERetargetSourceOrTarget::Target, TargetRig);
+    RetargetController->AutoMapChains(EAutoMapChainType::Exact, true);
+
+    const int32 RootMotionIndex = RetargetController->GetIndexOfOpByName(TEXT("Root Motion"));
+    if (RootMotionIndex != INDEX_NONE)
+    {
+        // The source Hips track carries locomotion. Copy it to the target's independent Root.
+        RetargetController->SetRetargetOpEnabled(RootMotionIndex, true);
+    }
+
+    const FName PrecisionPose(TEXT("PrecisionAligned"));
+    if (!RetargetController->GetRetargetPoses(ERetargetSourceOrTarget::Target).Contains(PrecisionPose))
+    {
+        RetargetController->CreateRetargetPose(PrecisionPose, ERetargetSourceOrTarget::Target);
+    }
+    RetargetController->SetCurrentRetargetPose(PrecisionPose, ERetargetSourceOrTarget::Target);
+    RetargetController->ResetRetargetPose(PrecisionPose, {}, ERetargetSourceOrTarget::Target);
+    RetargetController->AutoAlignAllBones(
+        ERetargetSourceOrTarget::Target,
+        ERetargetAutoAlignMethod::ChainToChain);
+    RetargetController->SnapBoneToGround(TEXT("ball_l"), ERetargetSourceOrTarget::Target);
+    RetargetController->CleanAsset();
+
+    SourceRig->MarkPackageDirty();
+    TargetRig->MarkPackageDirty();
+    Retargeter->MarkPackageDirty();
+    const bool bSaved = UEditorAssetLibrary::SaveAsset(SourceRigPath, false) &&
+        UEditorAssetLibrary::SaveAsset(TargetRigPath, false) &&
+        UEditorAssetLibrary::SaveAsset(RetargeterPath, false);
+
+    TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+    Response->SetStringField(TEXT("status"), TEXT("success"));
+    Response->SetNumberField(TEXT("source_chain_count"), SourceController->GetRetargetChains().Num());
+    Response->SetNumberField(TEXT("target_chain_count"), TargetController->GetRetargetChains().Num());
+    Response->SetBoolField(TEXT("root_motion_enabled"), RootMotionIndex != INDEX_NONE);
+    Response->SetBoolField(TEXT("saved"), bSaved);
+    Response->SetStringField(TEXT("message"), TEXT("Removed duplicate pelvis FK mapping and enabled locomotion transfer"));
     return Response;
 }
 

@@ -278,6 +278,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_object_property") ||
                      CommandType == TEXT("get_object_properties") ||
                      CommandType == TEXT("auto_align_ik_retargeter") ||
+                     CommandType == TEXT("fix_retarget_root_motion") ||
                      // Blueprint components
                      CommandType == TEXT("get_blueprint_components") ||
                      CommandType == TEXT("remove_component_from_blueprint") ||
