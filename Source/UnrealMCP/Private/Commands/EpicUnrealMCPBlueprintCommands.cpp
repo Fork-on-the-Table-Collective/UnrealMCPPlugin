@@ -30,6 +30,7 @@
 #include "Camera/CameraActor.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "BlueprintEditorLibrary.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
 #include "UObject/Field.h"
@@ -303,6 +304,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     else if (CommandType == TEXT("get_blueprint_parent_class"))
     {
         return HandleGetBlueprintParentClass(Params);
+    }
+    else if (CommandType == TEXT("reparent_blueprint"))
+    {
+        return HandleReparentBlueprint(Params);
     }
     // Actor Component Management
     else if (CommandType == TEXT("get_actor_components"))
@@ -3440,6 +3445,92 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetBlueprintParen
     Response->SetStringField(TEXT("status"), TEXT("success"));
     Response->SetStringField(TEXT("parent_class"), ParentClassName);
     return Response;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReparentBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString NewParentClassName;
+    if (!Params->TryGetStringField(TEXT("new_parent_class"), NewParentClassName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_parent_class' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to find blueprint: %s"), *BlueprintName));
+    }
+
+    // Resolve the new parent class by name. Accepts a bare class name (with or without its
+    // UE type prefix), a /Script/Engine or /Script/Game path, or a Blueprint asset path
+    // (for parenting to another Blueprint's generated class).
+    UClass* NewParentClass = nullptr;
+    {
+        FString ClassName = NewParentClassName;
+        NewParentClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::ExactClass);
+
+        if (!NewParentClass && !ClassName.StartsWith(TEXT("A")) && !ClassName.StartsWith(TEXT("U")))
+        {
+            NewParentClass = FindFirstObject<UClass>(*(TEXT("A") + ClassName), EFindFirstObjectOptions::ExactClass);
+            if (!NewParentClass)
+            {
+                NewParentClass = FindFirstObject<UClass>(*(TEXT("U") + ClassName), EFindFirstObjectOptions::ExactClass);
+            }
+        }
+
+        if (!NewParentClass)
+        {
+            NewParentClass = LoadObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Engine.%s"), *ClassName));
+        }
+        if (!NewParentClass)
+        {
+            NewParentClass = LoadObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Game.%s"), *ClassName));
+        }
+        if (!NewParentClass)
+        {
+            // Fall back to treating it as another Blueprint's generated class.
+            if (UBlueprint* ParentBlueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(ClassName))
+            {
+                NewParentClass = ParentBlueprint->GeneratedClass;
+            }
+        }
+    }
+
+    if (!NewParentClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not find parent class: %s"), *NewParentClassName));
+    }
+
+    if (Blueprint->GeneratedClass && NewParentClass->IsChildOf(Blueprint->GeneratedClass))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Cannot reparent '%s' to '%s': would create a circular class hierarchy"),
+                *BlueprintName, *NewParentClassName));
+    }
+
+    const FString OldParentClassName = Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None");
+
+    UBlueprintEditorLibrary::ReparentBlueprint(Blueprint, NewParentClass);
+
+    if (Blueprint->ParentClass != NewParentClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to reparent '%s' to '%s'"), *BlueprintName, *NewParentClassName));
+    }
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), BlueprintName);
+    ResultObj->SetStringField(TEXT("old_parent_class"), OldParentClassName);
+    ResultObj->SetStringField(TEXT("new_parent_class"), NewParentClass->GetName());
+    return FEpicUnrealMCPCommonUtils::CreateSuccessResponse(ResultObj);
 }
 
 TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetActorComponents(const TSharedPtr<FJsonObject>& Params)

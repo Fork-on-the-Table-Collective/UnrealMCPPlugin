@@ -284,6 +284,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("remove_component_from_blueprint") ||
                      CommandType == TEXT("set_component_properties") ||
                      CommandType == TEXT("get_blueprint_parent_class") ||
+                     CommandType == TEXT("reparent_blueprint") ||
                      // Actor components
                      CommandType == TEXT("get_actor_components") ||
                      CommandType == TEXT("add_component_to_actor") ||
