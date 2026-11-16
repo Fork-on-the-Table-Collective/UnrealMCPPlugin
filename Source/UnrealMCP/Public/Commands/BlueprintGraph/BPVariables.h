@@ -30,6 +30,15 @@ public:
      */
     static TSharedPtr<FJsonObject> SetVariableProperties(const TSharedPtr<FJsonObject>& Params);
 
+    /**
+     * Removes a member variable declared in this Blueprint (remove_blueprint_variable)
+     * @param Params JSON containing blueprint_name, variable_name, optional compile (default true)
+     *        and optional force (default false). A variable still used by Get/Set nodes is refused
+     *        unless force is true, in which case those nodes are removed too.
+     * @return JSON with success, removed_variable, removed_nodes and compile_status
+     */
+    static TSharedPtr<FJsonObject> RemoveVariable(const TSharedPtr<FJsonObject>& Params);
+
 private:
     /**
      * Converts a type string to FEdGraphPinType

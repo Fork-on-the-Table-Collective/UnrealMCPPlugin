@@ -38,6 +38,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     {
         return HandleSetVariableProperties(Params);
     }
+    else if (CommandType == TEXT("remove_blueprint_variable"))
+    {
+        return FBPVariables::RemoveVariable(Params);
+    }
     else if (CommandType == TEXT("add_event_node"))
     {
         return HandleAddEventNode(Params);
