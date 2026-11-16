@@ -226,55 +226,125 @@ UEdGraph* FEpicUnrealMCPCommonUtils::FindOrCreateEventGraph(UBlueprint* Blueprin
 }
 
 // Blueprint node utilities
-UK2Node_Event* FEpicUnrealMCPCommonUtils::CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position)
+UK2Node_Event* FEpicUnrealMCPCommonUtils::CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position, FString* OutError)
 {
+    auto Fail = [OutError, &EventName](const FString& Message) -> UK2Node_Event*
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateEventNode '%s': %s"), *EventName, *Message);
+        if (OutError)
+        {
+            *OutError = Message;
+        }
+        return nullptr;
+    };
+
     if (!Graph)
     {
-        return nullptr;
+        return Fail(TEXT("Invalid graph"));
     }
-    
+
     UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForGraph(Graph);
     if (!Blueprint)
     {
-        return nullptr;
+        return Fail(TEXT("Graph does not belong to a Blueprint"));
     }
-    
-    // Check for existing event node with this exact name
-    for (UEdGraphNode* Node : Graph->Nodes)
+
+    UClass* SearchClass = Blueprint->SkeletonGeneratedClass ? Blueprint->SkeletonGeneratedClass.Get() : Blueprint->GeneratedClass.Get();
+    if (!SearchClass)
     {
-        UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
-        if (EventNode && EventNode->EventReference.GetMemberName() == FName(*EventName))
+        SearchClass = Blueprint->ParentClass;
+    }
+    if (!SearchClass)
+    {
+        return Fail(TEXT("Blueprint has no generated or parent class"));
+    }
+
+    const FName EventFName(*EventName);
+    const UFunction* EventFunction = SearchClass->FindFunctionByName(EventFName);
+    if (!EventFunction)
+    {
+        return Fail(FString::Printf(TEXT("No inherited function named '%s' was found on %s or its parents. Use add_custom_event to create a new custom event."),
+            *EventName, *SearchClass->GetName()));
+    }
+
+    // Walk up to the original declaration so the reference points at the class that declares the
+    // event, not at this Blueprint (or a parent Blueprint) that already overrides it. This matches
+    // UK2Node_Event::FixupEventReference.
+    while (const UFunction* SuperFunction = EventFunction->GetSuperFunction())
+    {
+        EventFunction = SuperFunction;
+    }
+
+    UClass* DeclaringClass = EventFunction->GetOwnerClass();
+    if (!DeclaringClass)
+    {
+        return Fail(TEXT("Could not determine the class that declares the event"));
+    }
+    DeclaringClass = DeclaringClass->GetAuthoritativeClass();
+
+    if (DeclaringClass == Blueprint->GeneratedClass || DeclaringClass == Blueprint->SkeletonGeneratedClass)
+    {
+        return Fail(FString::Printf(TEXT("'%s' is declared in this Blueprint, not inherited, so it cannot be added as an override event."), *EventName));
+    }
+
+    // Same check the editor uses for the "Add Event" override list: a BlueprintImplementableEvent or
+    // BlueprintNativeEvent with no outputs, not static/const/thread-safe/internal.
+    if (!UEdGraphSchema_K2::FunctionCanBePlacedAsEvent(EventFunction))
+    {
+        if (!EventFunction->HasAnyFunctionFlags(FUNC_BlueprintEvent))
         {
-            UE_LOG(LogTemp, Display, TEXT("Using existing event node with name %s (ID: %s)"), 
-                *EventName, *EventNode->NodeGuid.ToString());
-            return EventNode;
+            return Fail(FString::Printf(TEXT("'%s' (declared in %s) is not a BlueprintImplementableEvent or BlueprintNativeEvent, so it cannot be overridden as an event."),
+                *EventName, *DeclaringClass->GetName()));
+        }
+        return Fail(FString::Printf(TEXT("'%s' (declared in %s) cannot be placed as an event (it has outputs or a return value, or is static, const, thread-safe or internal). Override it as a function instead."),
+            *EventName, *DeclaringClass->GetName()));
+    }
+
+    // Reuse an existing override of this event anywhere in the Blueprint, as the editor does.
+    if (UK2Node_Event* ExistingOverride = FBlueprintEditorUtils::FindOverrideForFunction(Blueprint, DeclaringClass, EventFName))
+    {
+        UE_LOG(LogTemp, Display, TEXT("Using existing override event node %s (ID: %s)"),
+            *EventName, *ExistingOverride->NodeGuid.ToString());
+        return ExistingOverride;
+    }
+
+    // Repair a broken node made by an earlier version of this plugin: it referenced the event by name
+    // but never set bOverrideFunction, so it compiled under the name None and never ran.
+    TArray<UK2Node_Event*> AllEventNodes;
+    FBlueprintEditorUtils::GetAllNodesOfClass<UK2Node_Event>(Blueprint, AllEventNodes);
+    for (UK2Node_Event* Existing : AllEventNodes)
+    {
+        if (Existing && !Existing->bOverrideFunction && Existing->CustomFunctionName.IsNone()
+            && Existing->EventReference.GetMemberName() == EventFName)
+        {
+            Existing->Modify();
+            Existing->EventReference.SetFromField<UFunction>(EventFunction, false);
+            Existing->bOverrideFunction = true;
+            if (!Existing->NodeGuid.IsValid())
+            {
+                Existing->CreateNewGuid();
+            }
+            Existing->ReconstructNode();
+            UE_LOG(LogTemp, Display, TEXT("Repaired existing non-override event node %s (ID: %s)"),
+                *EventName, *Existing->NodeGuid.ToString());
+            return Existing;
         }
     }
 
-    // No existing node found, create a new one
-    UK2Node_Event* EventNode = nullptr;
-    
-    // Find the function to create the event
-    UClass* BlueprintClass = Blueprint->GeneratedClass;
-    UFunction* EventFunction = BlueprintClass->FindFunctionByName(FName(*EventName));
-    
-    if (EventFunction)
-    {
-        EventNode = NewObject<UK2Node_Event>(Graph);
-        EventNode->EventReference.SetExternalMember(FName(*EventName), BlueprintClass);
-        EventNode->NodePosX = Position.X;
-        EventNode->NodePosY = Position.Y;
-        Graph->AddNode(EventNode, true);
-        EventNode->PostPlacedNewNode();
-        EventNode->AllocateDefaultPins();
-        UE_LOG(LogTemp, Display, TEXT("Created new event node with name %s (ID: %s)"), 
-            *EventName, *EventNode->NodeGuid.ToString());
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to find function for event name: %s"), *EventName);
-    }
-    
+    // Create the override node the same way UBlueprintEventNodeSpawner does
+    UK2Node_Event* EventNode = NewObject<UK2Node_Event>(Graph);
+    EventNode->EventReference.SetFromField<UFunction>(EventFunction, false);
+    EventNode->bOverrideFunction = true;
+    EventNode->CreateNewGuid();
+    EventNode->NodePosX = static_cast<int32>(Position.X);
+    EventNode->NodePosY = static_cast<int32>(Position.Y);
+    Graph->AddNode(EventNode, true);
+    EventNode->PostPlacedNewNode();
+    EventNode->AllocateDefaultPins();
+
+    UE_LOG(LogTemp, Display, TEXT("Created override event node %s from %s (ID: %s)"),
+        *EventName, *DeclaringClass->GetName(), *EventNode->NodeGuid.ToString());
+
     return EventNode;
 }
 

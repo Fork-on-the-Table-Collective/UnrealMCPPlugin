@@ -42,7 +42,12 @@ public:
     static UEdGraph* FindOrCreateEventGraph(UBlueprint* Blueprint);
     
     // Blueprint node utilities
-    static UK2Node_Event* CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position);
+    /**
+     * Creates (or reuses) an override event node for an inherited BlueprintImplementableEvent /
+     * BlueprintNativeEvent, matching the editor's "Add Event" behaviour.
+     * @param OutError Optional; receives the reason when nullptr is returned
+     */
+    static UK2Node_Event* CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position, FString* OutError = nullptr);
     static UK2Node_CallFunction* CreateFunctionCallNode(UEdGraph* Graph, UFunction* Function, const FVector2D& Position);
     static UK2Node_VariableGet* CreateVariableGetNode(UEdGraph* Graph, UBlueprint* Blueprint, const FString& VariableName, const FVector2D& Position);
     static UK2Node_VariableSet* CreateVariableSetNode(UEdGraph* Graph, UBlueprint* Blueprint, const FString& VariableName, const FVector2D& Position);
