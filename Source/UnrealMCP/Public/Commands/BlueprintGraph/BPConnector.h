@@ -33,9 +33,4 @@ private:
      * Finds a pin by its name in a node
      */
     static UEdGraphPin* FindPinByName(UK2Node* Node, const FString& PinName, EEdGraphPinDirection Direction);
-
-    /**
-     * Checks compatibility between two pins
-     */
-    static bool ArePinsCompatible(UEdGraphPin* SourcePin, UEdGraphPin* TargetPin);
 };

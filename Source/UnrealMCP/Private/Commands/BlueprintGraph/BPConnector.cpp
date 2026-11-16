@@ -137,16 +137,35 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Validate compatibility
-    if (!ArePinsCompatible(SourcePin, TargetPin))
+    // Let the graph schema validate and make the link, the same way the editor does. Unlike a plain
+    // pin-category comparison, the schema resolves wildcard pins (e.g. a Cast node's Object input,
+    // reroute nodes, array functions), rejects mismatched object/struct types, and notifies the nodes
+    // so wildcard pins pick up their type.
+    // Note: like the editor, linking into a data input that already has a link replaces that link,
+    // and linking from an exec output that already has a link moves it.
+    const UEdGraphSchema* Schema = Graph->GetSchema();
+    if (!Schema)
     {
         Result->SetBoolField("success", false);
-        Result->SetStringField("error", "Pins not compatible");
+        Result->SetStringField("error", "Graph has no schema");
         return Result;
     }
 
-    // Create connection
-    SourcePin->MakeLinkTo(TargetPin);
+    const FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
+    if (Response.Response == CONNECT_RESPONSE_DISALLOW)
+    {
+        const FString Reason = Response.Message.IsEmpty() ? TEXT("no reason given") : Response.Message.ToString();
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", FString::Printf(TEXT("Pins not compatible: %s"), *Reason));
+        return Result;
+    }
+
+    if (!Schema->TryCreateConnection(SourcePin, TargetPin))
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", "Schema refused the connection");
+        return Result;
+    }
 
     // Recompile
     Blueprint->MarkPackageDirty();
@@ -161,6 +180,15 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
     ConnectionInfo->SetStringField("target_node", TargetNodeId);
     ConnectionInfo->SetStringField("target_pin", TargetPinName);
     ConnectionInfo->SetStringField("connection_type", SourcePin->PinType.PinCategory.ToString());
+    ConnectionInfo->SetBoolField("replaced_existing_links",
+        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_A ||
+        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_B ||
+        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_AB);
+    ConnectionInfo->SetBoolField("conversion_node_created", Response.Response == CONNECT_RESPONSE_MAKE_WITH_CONVERSION_NODE);
+    if (!Response.Message.IsEmpty())
+    {
+        ConnectionInfo->SetStringField("schema_message", Response.Message.ToString());
+    }
 
     Result->SetObjectField("connection", ConnectionInfo);
 
@@ -209,14 +237,4 @@ UEdGraphPin* FBPConnector::FindPinByName(UK2Node* Node, const FString& PinName, 
         }
     }
     return nullptr;
-}
-
-bool FBPConnector::ArePinsCompatible(UEdGraphPin* SourcePin, UEdGraphPin* TargetPin)
-{
-    if (SourcePin->Direction != EGPD_Output || TargetPin->Direction != EGPD_Input)
-    {
-        return false;
-    }
-
-    return SourcePin->PinType.PinCategory == TargetPin->PinType.PinCategory;
 }
