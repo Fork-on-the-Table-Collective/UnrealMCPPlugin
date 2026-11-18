@@ -160,11 +160,26 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
+    // Snapshot every link on both nodes so we can report exactly which ones the schema removed.
+    // Links can be broken by more than BREAK_OTHERS responses: an automatic conversion node replaces
+    // the target input's existing link, and wildcard type resolution can drop now-incompatible links.
+    const TMap<FString, TSharedPtr<FJsonObject>> LinksBefore = CollectNodeLinks({ SourceNode, TargetNode });
+
     if (!Schema->TryCreateConnection(SourcePin, TargetPin))
     {
         Result->SetBoolField("success", false);
         Result->SetStringField("error", "Schema refused the connection");
         return Result;
+    }
+
+    const TMap<FString, TSharedPtr<FJsonObject>> LinksAfter = CollectNodeLinks({ SourceNode, TargetNode });
+    TArray<TSharedPtr<FJsonValue>> RemovedLinks;
+    for (const TPair<FString, TSharedPtr<FJsonObject>>& Link : LinksBefore)
+    {
+        if (!LinksAfter.Contains(Link.Key))
+        {
+            RemovedLinks.Add(MakeShared<FJsonValueObject>(Link.Value));
+        }
     }
 
     // Recompile
@@ -180,10 +195,8 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
     ConnectionInfo->SetStringField("target_node", TargetNodeId);
     ConnectionInfo->SetStringField("target_pin", TargetPinName);
     ConnectionInfo->SetStringField("connection_type", SourcePin->PinType.PinCategory.ToString());
-    ConnectionInfo->SetBoolField("replaced_existing_links",
-        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_A ||
-        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_B ||
-        Response.Response == CONNECT_RESPONSE_BREAK_OTHERS_AB);
+    ConnectionInfo->SetBoolField("replaced_existing_links", RemovedLinks.Num() > 0);
+    ConnectionInfo->SetArrayField("removed_links", RemovedLinks);
     ConnectionInfo->SetBoolField("conversion_node_created", Response.Response == CONNECT_RESPONSE_MAKE_WITH_CONVERSION_NODE);
     if (!Response.Message.IsEmpty())
     {
@@ -237,4 +250,58 @@ UEdGraphPin* FBPConnector::FindPinByName(UK2Node* Node, const FString& PinName, 
         }
     }
     return nullptr;
+}
+
+TMap<FString, TSharedPtr<FJsonObject>> FBPConnector::CollectNodeLinks(const TArray<UEdGraphNode*>& Nodes)
+{
+    TMap<FString, TSharedPtr<FJsonObject>> Links;
+
+    for (const UEdGraphNode* Node : Nodes)
+    {
+        if (!Node)
+        {
+            continue;
+        }
+
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (!Pin)
+            {
+                continue;
+            }
+
+            for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+            {
+                if (!LinkedPin || !LinkedPin->GetOwningNodeUnchecked())
+                {
+                    continue;
+                }
+
+                // Orient every link output -> input so both ends produce the same key.
+                const UEdGraphPin* OutputPin = Pin->Direction == EGPD_Output ? Pin : LinkedPin;
+                const UEdGraphPin* InputPin = Pin->Direction == EGPD_Output ? LinkedPin : Pin;
+                const UEdGraphNode* OutputNode = OutputPin->GetOwningNode();
+                const UEdGraphNode* InputNode = InputPin->GetOwningNode();
+                const FString OutputPinName = OutputPin->PinName.ToString();
+                const FString InputPinName = InputPin->PinName.ToString();
+
+                const FString Key = FString::Printf(TEXT("%s.%s->%s.%s"),
+                    *OutputNode->NodeGuid.ToString(), *OutputPinName, *InputNode->NodeGuid.ToString(), *InputPinName);
+                if (Links.Contains(Key))
+                {
+                    continue;
+                }
+
+                // Report node names: that is the node_id add_blueprint_node returns, and FindNodeById accepts it.
+                TSharedPtr<FJsonObject> LinkInfo = MakeShared<FJsonObject>();
+                LinkInfo->SetStringField("source_node", OutputNode->GetName());
+                LinkInfo->SetStringField("source_pin", OutputPinName);
+                LinkInfo->SetStringField("target_node", InputNode->GetName());
+                LinkInfo->SetStringField("target_pin", InputPinName);
+                Links.Add(Key, LinkInfo);
+            }
+        }
+    }
+
+    return Links;
 }
