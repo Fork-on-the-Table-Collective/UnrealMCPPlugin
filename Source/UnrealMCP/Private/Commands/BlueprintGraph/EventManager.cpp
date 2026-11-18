@@ -1,4 +1,5 @@
 #include "Commands/BlueprintGraph/EventManager.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "K2Node_Event.h"
@@ -57,11 +58,13 @@ TSharedPtr<FJsonObject> FEventManager::AddEventNode(const TSharedPtr<FJsonObject
 		return CreateErrorResponse(TEXT("Failed to get Blueprint event graph"));
 	}
 
-	// Create the event node
-	UK2Node_Event* EventNode = CreateEventNode(Graph, EventName, Position);
+	// Create (or reuse) the override event node. Shared with FEpicUnrealMCPCommonUtils so every
+	// event path sets bOverrideFunction, the declaring class and a node GUID the same way.
+	FString CreateError;
+	UK2Node_Event* EventNode = FEpicUnrealMCPCommonUtils::CreateEventNode(Graph, EventName, Position, &CreateError);
 	if (!EventNode)
 	{
-		return CreateErrorResponse(FString::Printf(TEXT("Failed to create event node: %s"), *EventName));
+		return CreateErrorResponse(FString::Printf(TEXT("Failed to create event node '%s': %s"), *EventName, *CreateError));
 	}
 
 	// Notify changes
@@ -69,80 +72,6 @@ TSharedPtr<FJsonObject> FEventManager::AddEventNode(const TSharedPtr<FJsonObject
 	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 
 	return CreateSuccessResponse(EventNode);
-}
-
-UK2Node_Event* FEventManager::CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position)
-{
-	if (!Graph)
-	{
-		return nullptr;
-	}
-
-	UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForGraph(Graph);
-	if (!Blueprint)
-	{
-		return nullptr;
-	}
-
-	// Check for existing event node to avoid duplicates
-	UK2Node_Event* ExistingNode = FindExistingEventNode(Graph, EventName);
-	if (ExistingNode)
-	{
-		UE_LOG(LogTemp, Display, TEXT("F18: Using existing event node '%s' (ID: %s)"),
-			*EventName, *ExistingNode->NodeGuid.ToString());
-		return ExistingNode;
-	}
-
-	// Create new event node
-	UK2Node_Event* EventNode = nullptr;
-	UClass* BlueprintClass = Blueprint->GeneratedClass;
-
-	if (!BlueprintClass)
-	{
-		UE_LOG(LogTemp, Error, TEXT("F18: Blueprint has no generated class"));
-		return nullptr;
-	}
-
-	UFunction* EventFunction = BlueprintClass->FindFunctionByName(FName(*EventName));
-
-	if (EventFunction)
-	{
-		EventNode = NewObject<UK2Node_Event>(Graph);
-		EventNode->EventReference.SetExternalMember(FName(*EventName), BlueprintClass);
-		EventNode->NodePosX = static_cast<int32>(Position.X);
-		EventNode->NodePosY = static_cast<int32>(Position.Y);
-		Graph->AddNode(EventNode, true);
-		EventNode->PostPlacedNewNode();
-		EventNode->AllocateDefaultPins();
-
-		UE_LOG(LogTemp, Display, TEXT("F18: Created new event node '%s' (ID: %s)"),
-			*EventName, *EventNode->NodeGuid.ToString());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("F18: Failed to find function for event name: %s"), *EventName);
-	}
-
-	return EventNode;
-}
-
-UK2Node_Event* FEventManager::FindExistingEventNode(UEdGraph* Graph, const FString& EventName)
-{
-	if (!Graph)
-	{
-		return nullptr;
-	}
-
-	for (UEdGraphNode* Node : Graph->Nodes)
-	{
-		UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
-		if (EventNode && EventNode->EventReference.GetMemberName() == FName(*EventName))
-		{
-			return EventNode;
-		}
-	}
-
-	return nullptr;
 }
 
 UBlueprint* FEventManager::LoadBlueprint(const FString& BlueprintName)
@@ -184,7 +113,13 @@ TSharedPtr<FJsonObject> FEventManager::CreateSuccessResponse(const UK2Node_Event
 	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
 	Response->SetBoolField(TEXT("success"), true);
 	Response->SetStringField(TEXT("node_id"), EventNode->NodeGuid.ToString());
+	Response->SetStringField(TEXT("node_name"), EventNode->GetName());
 	Response->SetStringField(TEXT("event_name"), EventNode->EventReference.GetMemberName().ToString());
+	Response->SetBoolField(TEXT("is_override"), EventNode->bOverrideFunction);
+	if (const UClass* DeclaringClass = EventNode->EventReference.GetMemberParentClass())
+	{
+		Response->SetStringField(TEXT("declaring_class"), DeclaringClass->GetPathName());
+	}
 	Response->SetNumberField(TEXT("pos_x"), EventNode->NodePosX);
 	Response->SetNumberField(TEXT("pos_y"), EventNode->NodePosY);
 	return Response;

@@ -7,6 +7,7 @@
 // Forward declarations
 class UK2Node;
 class UEdGraph;
+class UEdGraphNode;
 class UEdGraphPin;
 enum EEdGraphPinDirection : int;
 
@@ -35,7 +36,8 @@ private:
     static UEdGraphPin* FindPinByName(UK2Node* Node, const FString& PinName, EEdGraphPinDirection Direction);
 
     /**
-     * Checks compatibility between two pins
+     * Collects every link touching the given nodes, keyed by "outputNode.pin->inputNode.pin" so a link
+     * between two of the nodes is recorded once. Values describe the link for JSON responses.
      */
-    static bool ArePinsCompatible(UEdGraphPin* SourcePin, UEdGraphPin* TargetPin);
+    static TMap<FString, TSharedPtr<FJsonObject>> CollectNodeLinks(const TArray<UEdGraphNode*>& Nodes);
 };

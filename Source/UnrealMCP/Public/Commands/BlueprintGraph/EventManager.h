@@ -30,23 +30,7 @@ public:
 	static TSharedPtr<FJsonObject> AddEventNode(const TSharedPtr<FJsonObject>& Params);
 
 private:
-	/**
-	 * Create an event node in the specified graph
-	 * Inspired by chongdashu's implementation
-	 * @param Graph The Blueprint event graph
-	 * @param EventName Name of the event function
-	 * @param Position Position in the graph
-	 * @return Created event node or nullptr on failure
-	 */
-	static UK2Node_Event* CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position);
-
-	/**
-	 * Find existing event node with the same name (to avoid duplicates)
-	 * @param Graph The Blueprint event graph
-	 * @param EventName Name of the event to find
-	 * @return Existing event node or nullptr if not found
-	 */
-	static UK2Node_Event* FindExistingEventNode(UEdGraph* Graph, const FString& EventName);
+	// Node creation lives in FEpicUnrealMCPCommonUtils::CreateEventNode (shared with other event paths).
 
 	/**
 	 * Load a Blueprint by name

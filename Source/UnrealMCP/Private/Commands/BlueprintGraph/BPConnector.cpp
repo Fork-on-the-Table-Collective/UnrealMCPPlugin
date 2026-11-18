@@ -137,16 +137,50 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Validate compatibility
-    if (!ArePinsCompatible(SourcePin, TargetPin))
+    // Let the graph schema validate and make the link, the same way the editor does. Unlike a plain
+    // pin-category comparison, the schema resolves wildcard pins (e.g. a Cast node's Object input,
+    // reroute nodes, array functions), rejects mismatched object/struct types, and notifies the nodes
+    // so wildcard pins pick up their type.
+    // Note: like the editor, linking into a data input that already has a link replaces that link,
+    // and linking from an exec output that already has a link moves it.
+    const UEdGraphSchema* Schema = Graph->GetSchema();
+    if (!Schema)
     {
         Result->SetBoolField("success", false);
-        Result->SetStringField("error", "Pins not compatible");
+        Result->SetStringField("error", "Graph has no schema");
         return Result;
     }
 
-    // Create connection
-    SourcePin->MakeLinkTo(TargetPin);
+    const FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
+    if (Response.Response == CONNECT_RESPONSE_DISALLOW)
+    {
+        const FString Reason = Response.Message.IsEmpty() ? TEXT("no reason given") : Response.Message.ToString();
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", FString::Printf(TEXT("Pins not compatible: %s"), *Reason));
+        return Result;
+    }
+
+    // Snapshot every link on both nodes so we can report exactly which ones the schema removed.
+    // Links can be broken by more than BREAK_OTHERS responses: an automatic conversion node replaces
+    // the target input's existing link, and wildcard type resolution can drop now-incompatible links.
+    const TMap<FString, TSharedPtr<FJsonObject>> LinksBefore = CollectNodeLinks({ SourceNode, TargetNode });
+
+    if (!Schema->TryCreateConnection(SourcePin, TargetPin))
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", "Schema refused the connection");
+        return Result;
+    }
+
+    const TMap<FString, TSharedPtr<FJsonObject>> LinksAfter = CollectNodeLinks({ SourceNode, TargetNode });
+    TArray<TSharedPtr<FJsonValue>> RemovedLinks;
+    for (const TPair<FString, TSharedPtr<FJsonObject>>& Link : LinksBefore)
+    {
+        if (!LinksAfter.Contains(Link.Key))
+        {
+            RemovedLinks.Add(MakeShared<FJsonValueObject>(Link.Value));
+        }
+    }
 
     // Recompile
     Blueprint->MarkPackageDirty();
@@ -161,6 +195,13 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
     ConnectionInfo->SetStringField("target_node", TargetNodeId);
     ConnectionInfo->SetStringField("target_pin", TargetPinName);
     ConnectionInfo->SetStringField("connection_type", SourcePin->PinType.PinCategory.ToString());
+    ConnectionInfo->SetBoolField("replaced_existing_links", RemovedLinks.Num() > 0);
+    ConnectionInfo->SetArrayField("removed_links", RemovedLinks);
+    ConnectionInfo->SetBoolField("conversion_node_created", Response.Response == CONNECT_RESPONSE_MAKE_WITH_CONVERSION_NODE);
+    if (!Response.Message.IsEmpty())
+    {
+        ConnectionInfo->SetStringField("schema_message", Response.Message.ToString());
+    }
 
     Result->SetObjectField("connection", ConnectionInfo);
 
@@ -211,12 +252,56 @@ UEdGraphPin* FBPConnector::FindPinByName(UK2Node* Node, const FString& PinName, 
     return nullptr;
 }
 
-bool FBPConnector::ArePinsCompatible(UEdGraphPin* SourcePin, UEdGraphPin* TargetPin)
+TMap<FString, TSharedPtr<FJsonObject>> FBPConnector::CollectNodeLinks(const TArray<UEdGraphNode*>& Nodes)
 {
-    if (SourcePin->Direction != EGPD_Output || TargetPin->Direction != EGPD_Input)
+    TMap<FString, TSharedPtr<FJsonObject>> Links;
+
+    for (const UEdGraphNode* Node : Nodes)
     {
-        return false;
+        if (!Node)
+        {
+            continue;
+        }
+
+        for (const UEdGraphPin* Pin : Node->Pins)
+        {
+            if (!Pin)
+            {
+                continue;
+            }
+
+            for (const UEdGraphPin* LinkedPin : Pin->LinkedTo)
+            {
+                if (!LinkedPin || !LinkedPin->GetOwningNodeUnchecked())
+                {
+                    continue;
+                }
+
+                // Orient every link output -> input so both ends produce the same key.
+                const UEdGraphPin* OutputPin = Pin->Direction == EGPD_Output ? Pin : LinkedPin;
+                const UEdGraphPin* InputPin = Pin->Direction == EGPD_Output ? LinkedPin : Pin;
+                const UEdGraphNode* OutputNode = OutputPin->GetOwningNode();
+                const UEdGraphNode* InputNode = InputPin->GetOwningNode();
+                const FString OutputPinName = OutputPin->PinName.ToString();
+                const FString InputPinName = InputPin->PinName.ToString();
+
+                const FString Key = FString::Printf(TEXT("%s.%s->%s.%s"),
+                    *OutputNode->NodeGuid.ToString(), *OutputPinName, *InputNode->NodeGuid.ToString(), *InputPinName);
+                if (Links.Contains(Key))
+                {
+                    continue;
+                }
+
+                // Report node names: that is the node_id add_blueprint_node returns, and FindNodeById accepts it.
+                TSharedPtr<FJsonObject> LinkInfo = MakeShared<FJsonObject>();
+                LinkInfo->SetStringField("source_node", OutputNode->GetName());
+                LinkInfo->SetStringField("source_pin", OutputPinName);
+                LinkInfo->SetStringField("target_node", InputNode->GetName());
+                LinkInfo->SetStringField("target_pin", InputPinName);
+                Links.Add(Key, LinkInfo);
+            }
+        }
     }
 
-    return SourcePin->PinType.PinCategory == TargetPin->PinType.PinCategory;
+    return Links;
 }

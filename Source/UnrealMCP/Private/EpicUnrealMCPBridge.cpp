@@ -321,6 +321,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("connect_nodes") ||
                      CommandType == TEXT("create_variable") ||
                      CommandType == TEXT("set_blueprint_variable_properties") ||
+                     CommandType == TEXT("remove_blueprint_variable") ||
                      CommandType == TEXT("add_event_node") ||
                      CommandType == TEXT("delete_node") ||
                      CommandType == TEXT("set_node_property") ||
@@ -328,7 +329,17 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_function_input") ||
                      CommandType == TEXT("add_function_output") ||
                      CommandType == TEXT("delete_function") ||
-                     CommandType == TEXT("rename_function"))
+                     CommandType == TEXT("rename_function") ||
+                     // Local variables, custom events and node layout: handled by
+                     // FEpicUnrealMCPBlueprintGraphCommands but previously missing from this list
+                     CommandType == TEXT("add_local_variable") ||
+                     CommandType == TEXT("get_local_variables") ||
+                     CommandType == TEXT("remove_local_variable") ||
+                     CommandType == TEXT("add_custom_event") ||
+                     CommandType == TEXT("add_event_parameter") ||
+                     CommandType == TEXT("arrange_nodes_auto") ||
+                     CommandType == TEXT("arrange_nodes_linear") ||
+                     CommandType == TEXT("set_node_position"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }

@@ -2,6 +2,7 @@
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "EdGraphSchema_K2.h"
+#include "K2Node_Variable.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -389,6 +390,135 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
     Result->SetStringField("variable_name", VariableName);
     Result->SetObjectField("properties_updated", UpdatedProperties);
     Result->SetStringField("message", "Variable properties updated successfully");
+
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FBPVariables::RemoveVariable(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!Params.IsValid())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Invalid parameters"));
+    }
+
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString VariableName;
+    if (!Params->TryGetStringField(TEXT("variable_name"), VariableName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'variable_name' parameter"));
+    }
+
+    bool bCompile = true;
+    Params->TryGetBoolField(TEXT("compile"), bCompile);
+
+    bool bForce = false;
+    Params->TryGetBoolField(TEXT("force"), bForce);
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    const FName VarName(*VariableName);
+    if (FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, VarName) == INDEX_NONE)
+    {
+        // Give a precise reason when the variable is declared in a parent Blueprint
+        UBlueprint* DeclaringBlueprint = nullptr;
+        if (FBlueprintEditorUtils::FindNewVariableIndexAndBlueprint(Blueprint, VarName, DeclaringBlueprint) != INDEX_NONE
+            && DeclaringBlueprint && DeclaringBlueprint != Blueprint)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+                TEXT("Variable '%s' is declared in parent Blueprint '%s'; remove it there instead"),
+                *VariableName, *DeclaringBlueprint->GetPathName()));
+        }
+
+        TArray<FString> ExistingNames;
+        for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+        {
+            ExistingNames.Add(Var.VarName.ToString());
+        }
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+            TEXT("Member variable not found: '%s'. Member variables in %s: %s"),
+            *VariableName, *Blueprint->GetName(),
+            ExistingNames.Num() > 0 ? *FString::Join(ExistingNames, TEXT(", ")) : TEXT("(none)")));
+    }
+
+    // Find the Get/Set nodes that RemoveMemberVariable would delete with the variable
+    // (same filter as FBlueprintEditorUtils::RemoveVariableNodes: self-context nodes for this name).
+    UClass* SelfClass = Blueprint->GeneratedClass;
+    TArray<UK2Node_Variable*> VariableNodes;
+    FBlueprintEditorUtils::GetAllNodesOfClass<UK2Node_Variable>(Blueprint, VariableNodes);
+
+    TArray<TSharedPtr<FJsonValue>> UsingNodes;
+    TArray<FString> UsingNodeDescriptions;
+    for (UK2Node_Variable* Node : VariableNodes)
+    {
+        if (!Node || Node->GetVarName() != VarName)
+        {
+            continue;
+        }
+        if (Node->VariableReference.GetMemberParentClass(SelfClass) != SelfClass)
+        {
+            continue;
+        }
+
+        const UEdGraph* NodeGraph = Node->GetGraph();
+        const FString GraphName = NodeGraph ? NodeGraph->GetName() : TEXT("?");
+
+        TSharedPtr<FJsonObject> NodeInfo = MakeShared<FJsonObject>();
+        NodeInfo->SetStringField(TEXT("node_id"), Node->NodeGuid.ToString());
+        NodeInfo->SetStringField(TEXT("node_name"), Node->GetName());
+        NodeInfo->SetStringField(TEXT("graph"), GraphName);
+        UsingNodes.Add(MakeShared<FJsonValueObject>(NodeInfo));
+        UsingNodeDescriptions.Add(FString::Printf(TEXT("%s (%s)"), *Node->GetName(), *GraphName));
+    }
+
+    if (UsingNodes.Num() > 0 && !bForce)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+            TEXT("Variable '%s' is still used by %d node(s): %s. Pass force: true to remove the variable and these nodes."),
+            *VariableName, UsingNodes.Num(), *FString::Join(UsingNodeDescriptions, TEXT(", "))));
+    }
+
+    // Removes the variable description, destroys its Get/Set nodes and marks the Blueprint as
+    // structurally modified.
+    FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VarName);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("removed_variable"), VariableName);
+    Result->SetNumberField(TEXT("removed_node_count"), UsingNodes.Num());
+    Result->SetArrayField(TEXT("removed_nodes"), UsingNodes);
+    Result->SetBoolField(TEXT("compiled"), bCompile);
+
+    if (bCompile)
+    {
+        // Compile now: saving before a compile keeps the stale property in the saved class defaults.
+        FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+        FString Status;
+        switch (Blueprint->Status)
+        {
+        case BS_UpToDate:             Status = TEXT("up_to_date"); break;
+        case BS_UpToDateWithWarnings: Status = TEXT("up_to_date_with_warnings"); break;
+        case BS_Error:                Status = TEXT("error"); break;
+        case BS_Dirty:                Status = TEXT("dirty"); break;
+        default:                      Status = TEXT("unknown"); break;
+        }
+        Result->SetStringField(TEXT("compile_status"), Status);
+        Result->SetBoolField(TEXT("property_still_on_class"),
+            Blueprint->GeneratedClass && FindFProperty<FProperty>(Blueprint->GeneratedClass, VarName) != nullptr);
+    }
+    else
+    {
+        Result->SetStringField(TEXT("note"), TEXT("Blueprint not compiled; compile it before saving, or the saved class defaults keep the old property."));
+    }
 
     return Result;
 }
